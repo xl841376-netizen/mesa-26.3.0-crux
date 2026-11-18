@@ -3,7 +3,7 @@ name: Build Mesa 26.3.0 deb for crux (SM8150 / Adreno 640)
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [master, main]
     paths:
       - '.github/workflows/build.yml'
       - 'debian/**'
