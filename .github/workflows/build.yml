@@ -1,4 +1,4 @@
-name: Build Mesa 26.3.0 deb for crux (SM8150 / Adreno 640)
+name: "Build Mesa 26.3.0 deb for crux (SM8150 / Adreno 640)"
 
 on:
   workflow_dispatch:
@@ -44,7 +44,7 @@ jobs:
           pkg-config --modversion wayland-protocols
           wayland-scanner --version
 
-      - name: Build wayland 1.26.0 (for wayland-scanner >= 1.25)
+      - name: "Build wayland 1.26.0 (for wayland-scanner >= 1.25)"
         run: |
           # Mesa 26.3.0 requires wayland-protocols >= 1.49; the 1.49 XML uses
           # features (sampling device on linux-buffer-params) that 1.24 scanner
@@ -65,7 +65,7 @@ jobs:
           fi
           /usr/local/bin/wayland-scanner --version || wayland-scanner --version
 
-      - name: Build wayland-protocols 1.49 (if system is older)
+      - name: "Build wayland-protocols 1.49 (if system is older)"
         run: |
           if [ "$(pkg-config --modversion wayland-protocols)" != "1.49" ]; then
             echo "Fetching wayland-protocols 1.49"
@@ -111,9 +111,10 @@ jobs:
         working-directory: ${{ github.workspace }}/mesa-26.3.0
         env:
           PATH: /usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
-        run: ninja -C build -j$(nproc)
+        run: |
+          ninja -C build -j$(nproc)
 
-      - name: Install to staging dir (A: DESTDIR)
+      - name: "Install to staging dir (A: DESTDIR)"
         working-directory: ${{ github.workspace }}/mesa-26.3.0
         env:
           PATH: /usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -122,7 +123,7 @@ jobs:
           find stage -type f | wc -l
           du -sh stage
 
-      - name: Package as .deb (B: dpkg)
+      - name: "Package as .deb (B: dpkg)"
         run: bash ./debian/make-deb.sh "${{ github.workspace }}/mesa-26.3.0" "${{ github.workspace }}/dist"
 
       - name: Upload artifacts
