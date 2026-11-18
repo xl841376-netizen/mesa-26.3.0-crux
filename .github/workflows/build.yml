@@ -1,0 +1,146 @@
+name: Build Mesa 26.3.0 deb for crux (SM8150 / Adreno 640)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build.yml'
+      - 'debian/**'
+
+jobs:
+  build:
+    # ARM64 native runner (GitHub-hosted arm64 Linux)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show runner info
+        run: |
+          uname -a
+          cat /etc/os-release | head -3
+          nproc
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential meson ninja-build pkg-config python3-mako python3-yaml \
+            bison flex glslang-tools \
+            libdrm-dev libudev-dev libexpat1-dev zlib1g-dev libzstd-dev \
+            libwayland-dev wayland-protocols libwayland-egl-backend-dev \
+            libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxdamage-dev \
+            libxcb1-dev libxcb-dri2-0-dev libxcb-dri3-dev libxcb-present-dev \
+            libxcb-sync-dev libxcb-shm0-dev libxcb-glx0-dev libxcb-keysyms1-dev \
+            libxcb-randr0-dev libxcb-xfixes0-dev libxshmfence-dev \
+            libxrandr-dev libxi-dev libxxf86vm-dev libxkbcommon-dev \
+            libglvnd-dev libelf-dev libunwind-dev \
+            dpkg-dev devscripts debhelper fakeroot ccache
+
+      - name: Check wayland-protocols version
+        run: |
+          pkg-config --modversion wayland-protocols
+          wayland-scanner --version
+
+      - name: Build wayland 1.26.0 (for wayland-scanner >= 1.25)
+        run: |
+          # Mesa 26.3.0 requires wayland-protocols >= 1.49; the 1.49 XML uses
+          # features (sampling device on linux-buffer-params) that 1.24 scanner
+          # cannot emit. Build a newer scanner to /usr/local.
+          if [ "$(wayland-scanner --version | awk '{print $2}' | cut -d. -f2)" -lt 25 ]; then
+            echo "wayland-scanner too old, building wayland 1.26.0"
+            curl -L --retry 3 -o /tmp/wayland.tar.xz \
+              "https://gitlab.freedesktop.org/wayland/wayland/-/releases/1.26.0/downloads/wayland-1.26.0.tar.xz"
+            tar -xf /tmp/wayland.tar.xz -C /tmp
+            meson setup /tmp/wayland-1.26.0/build /tmp/wayland-1.26.0 \
+              --prefix=/usr/local -Ddocumentation=false -Dtests=false
+            ninja -C /tmp/wayland-1.26.0/build
+            sudo ninja -C /tmp/wayland-1.26.0/build install
+            sudo ldconfig
+            hash -r
+          else
+            echo "wayland-scanner is new enough"
+          fi
+          /usr/local/bin/wayland-scanner --version || wayland-scanner --version
+
+      - name: Build wayland-protocols 1.49 (if system is older)
+        run: |
+          if [ "$(pkg-config --modversion wayland-protocols)" != "1.49" ]; then
+            echo "Fetching wayland-protocols 1.49"
+            curl -L --retry 3 -o /tmp/wp.tar.xz \
+              "https://gitlab.freedesktop.org/wayland/wayland-protocols/-/releases/1.49/downloads/wayland-protocols-1.49.tar.xz"
+            tar -xf /tmp/wp.tar.xz -C /tmp
+            PATH=/usr/local/bin:$PATH \
+            meson setup /tmp/wayland-protocols-1.49/build /tmp/wayland-protocols-1.49 \
+              --prefix=/usr/local -Dtests=false
+            PATH=/usr/local/bin:$PATH ninja -C /tmp/wayland-protocols-1.49/build
+            sudo PATH=/usr/local/bin:$PATH ninja -C /tmp/wayland-protocols-1.49/build install
+          else
+            echo "system wayland-protocols already 1.49"
+          fi
+
+      - name: Fetch Mesa 26.3.0 source
+        run: |
+          curl -L --retry 3 -o /tmp/mesa.tar.xz \
+            "https://archive.mesa3d.org/mesa-26.3.0.tar.xz"
+          tar -xf /tmp/mesa.tar.xz -C "$GITHUB_WORKSPACE"
+          ls -d "$GITHUB_WORKSPACE"/mesa-26.3.0
+
+      - name: Configure Mesa
+        working-directory: ${{ github.workspace }}/mesa-26.3.0
+        env:
+          PKG_CONFIG_PATH: /usr/local/share/pkgconfig:/usr/local/lib/aarch64-linux-gnu/pkgconfig
+          PATH: /usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+        run: |
+          meson setup build \
+            --prefix=/usr \
+            --libdir=lib/aarch64-linux-gnu \
+            -Dgallium-drivers=freedreno \
+            -Dvulkan-drivers=freedreno \
+            -Dplatforms=wayland,x11 \
+            -Dglx=dri \
+            -Degl=enabled \
+            -Dgbm=enabled \
+            -Dglvnd=enabled \
+            -Dbuildtype=release \
+            -Dstrip=true
+
+      - name: Build Mesa
+        working-directory: ${{ github.workspace }}/mesa-26.3.0
+        env:
+          PATH: /usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+        run: ninja -C build -j$(nproc)
+
+      - name: Install to staging dir (A: DESTDIR)
+        working-directory: ${{ github.workspace }}/mesa-26.3.0
+        env:
+          PATH: /usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+        run: |
+          DESTDIR="$PWD/stage" ninja -C build install
+          find stage -type f | wc -l
+          du -sh stage
+
+      - name: Package as .deb (B: dpkg)
+        run: bash ./debian/make-deb.sh "${{ github.workspace }}/mesa-26.3.0" "${{ github.workspace }}/dist"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mesa-26.3.0-crux-deb
+          path: dist/*.deb
+          retention-days: 90
+
+      - name: Also upload raw staging tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: mesa-26.3.0-stage-tree
+          path: |
+            mesa-26.3.0/stage/usr/lib/aarch64-linux-gnu/libgallium-26.3.0.so
+            mesa-26.3.0/stage/usr/lib/aarch64-linux-gnu/libGLX_mesa.so.0.0.0
+            mesa-26.3.0/stage/usr/lib/aarch64-linux-gnu/libEGL_mesa.so.0.0.0
+            mesa-26.3.0/stage/usr/lib/aarch64-linux-gnu/libvulkan_freedreno.so
+            mesa-26.3.0/stage/usr/lib/aarch64-linux-gnu/libgbm.so.1.0.0
+          retention-days: 90
+          if-no-files-found: warn
