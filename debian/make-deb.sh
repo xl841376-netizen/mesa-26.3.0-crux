@@ -66,9 +66,11 @@ while read -r f; do
   fi
 done
 
-# 清掉空目录
-find "$ROOT" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+# 清掉空目录（务必保留 DEBIAN，它此时还是空的，后面才写 control）
+find "$ROOT" -mindepth 1 -type d -empty -not -path "$ROOT/DEBIAN" -delete 2>/dev/null || true
 rm -f "$TMPKEEP"
+
+mkdir -p "$ROOT/DEBIAN"
 
 SIZE_KB=$(du -sk "$ROOT" | cut -f1)
 
